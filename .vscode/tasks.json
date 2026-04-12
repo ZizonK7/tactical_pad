@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build tactical_pad/program.py",
+			"type": "shell",
+			"command": "python program.py",
+			"group": "build"
+		},
+		{
+			"label": "Build tactical_pad/program.py",
+			"type": "shell",
+			"command": "python program.py",
+			"group": "build"
+		}
+	]
+}
