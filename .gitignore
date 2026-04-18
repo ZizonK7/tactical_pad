@@ -1,0 +1,7 @@
+venv/
+build/
+.vscode/
+roster/
+
+*.pkg
+#pyinstaller --noconfirm --windowed --onefile --icon="assets\thumbnail.ico" --name "TacticalPad" --add-data="assets;assets" --distpath="C:\Users\피콜록콜록\OneDrive\바탕 화면\새 폴더\Program" program.py

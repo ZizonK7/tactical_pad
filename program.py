@@ -4,18 +4,20 @@ import json
 import re
 import sys
 import tkinter as tk
-from tkinter import filedialog, simpledialog
+from tkinter import filedialog, messagebox, simpledialog
 from urllib.request import Request, urlopen
 
 import pygame
 
 
-WINDOW_SIZE = (1600, 750)
+WINDOW_SIZE = [1600, 750]  # 리스트로 변경해 동적 갱신
 FPS = 60
 PLAYER_RADIUS = 18
-TOOL_PANEL_RECT = pygame.Rect(15, 15, 190, 470)
+TOOL_PANEL_RECT = pygame.Rect(15, 15, 190, 545)
 PITCH_LEFT_OFFSET = 230
-PITCH_RECT = pygame.Rect(PITCH_LEFT_OFFSET, 0, WINDOW_SIZE[0] - PITCH_LEFT_OFFSET, WINDOW_SIZE[1])
+def get_pitch_rect():
+	return pygame.Rect(PITCH_LEFT_OFFSET, 0, WINDOW_SIZE[0] - PITCH_LEFT_OFFSET, WINDOW_SIZE[1])
+PITCH_RECT = get_pitch_rect()
 LASER_DRAW_MIN_DIST_SQ = 9
 LASER_FADE_FRAMES = 22
 LETTERBOX_COLOR = (12, 18, 22)
@@ -120,6 +122,7 @@ MODE_MOVE = "move"
 MODE_LASER = "laser"
 MODE_ZONE = "zone"
 MODE_LINK = "link"
+MODE_DRAW = "draw"
 TOOL_CAPTURE = "capture"
 CAPTURE_NOTICE_FRAMES = 120
 TOOL_LOAD_LEFT_ROSTER = "load_left_roster"
@@ -131,6 +134,7 @@ TOOL_COLOR_RIGHT = "color_right"
 TOOL_LOAD_FOTMOB = "load_fotmob"
 TOOL_TOGGLE_LEFT_TEAM = "toggle_left_team"
 TOOL_TOGGLE_RIGHT_TEAM = "toggle_right_team"
+TOOL_CLEAR_ALL = "clear_all"
 
 ROSTER_PICK_TEAM = "team"
 
@@ -1229,8 +1233,9 @@ def draw_fallback_pitch(surface, area_rect):
 
 def create_default_players(size):
 	def pos(rx, ry):
-		x = int(PITCH_RECT.left + rx * PITCH_RECT.width)
-		y = int(PITCH_RECT.top + ry * PITCH_RECT.height)
+		pitch_rect = get_pitch_rect()
+		x = int(pitch_rect.left + rx * pitch_rect.width)
+		y = int(pitch_rect.top + ry * pitch_rect.height)
 		return x, y
 
 	left_layout = get_team_formation_layout("left", DEFAULT_FORMATION)
@@ -1271,6 +1276,8 @@ def build_tool_buttons():
 	load_right_roster_button = pygame.Rect(30, 335, 160, 34)
 	save_right_roster_button = pygame.Rect(30, 375, 160, 34)
 	load_fotmob_button = pygame.Rect(30, 415, 160, 34)
+	draw_button = pygame.Rect(30, 455, 160, 34)
+	clear_all_button = pygame.Rect(30, 495, 160, 28)
 	return {
 		TOOL_TOGGLE_LEFT_TEAM: left_team_toggle,
 		TOOL_TOGGLE_RIGHT_TEAM: right_team_toggle,
@@ -1286,6 +1293,8 @@ def build_tool_buttons():
 		TOOL_LOAD_RIGHT_ROSTER: load_right_roster_button,
 		TOOL_SAVE_RIGHT_ROSTER: save_right_roster_button,
 		TOOL_LOAD_FOTMOB: load_fotmob_button,
+		MODE_DRAW: draw_button,
+		TOOL_CLEAR_ALL: clear_all_button,
 	}
 
 def draw_tool_panel(surface, font, mode, buttons, team_name_visibility):
@@ -1327,6 +1336,10 @@ def draw_tool_panel(surface, font, mode, buttons, team_name_visibility):
 				label = "Color R"
 			elif key == TOOL_LOAD_FOTMOB:
 				label = "FotMob"
+			elif key == MODE_DRAW:
+				label = "Draw"
+			elif key == TOOL_CLEAR_ALL:
+				label = "Clear All"
 			else:
 				label = "Capture"
 		pygame.draw.rect(surface, fill_color, rect, border_radius=8)
@@ -1334,9 +1347,12 @@ def draw_tool_panel(surface, font, mode, buttons, team_name_visibility):
 		text = font.render(label, True, (255, 255, 255))
 		surface.blit(text, text.get_rect(center=rect.center))
 
-	help_text = "M:Move  L:Laser  C:Circle  V:Link"
-	help_surface = font.render(help_text, True, (230, 230, 230))
-	surface.blit(help_surface, (TOOL_PANEL_RECT.x + 12, TOOL_PANEL_RECT.y + 460))
+	help_text1 = "M:Move  L:Laser  C:Circle"
+	help_text2 = "V:Link  D:Draw"
+	help1 = font.render(help_text1, True, (230, 230, 230))
+	help2 = font.render(help_text2, True, (230, 230, 230))
+	surface.blit(help1, (TOOL_PANEL_RECT.x + 12, TOOL_PANEL_RECT.y + 528))
+	surface.blit(help2, (TOOL_PANEL_RECT.x + 12, TOOL_PANEL_RECT.y + 543))
 
 
 def draw_team_color_menu(surface, font, menu_rect, team_name, hovered_idx, current_color):
@@ -1467,10 +1483,36 @@ def draw_laser_stroke(surface, points, alpha_scale=1.0):
 	surface.blit(overlay, (0, 0))
 
 
+def pick_draw_stroke_at(strokes, pos, tolerance=8):
+	mx, my = pos
+	threshold = tolerance * tolerance
+	for idx in range(len(strokes) - 1, -1, -1):
+		stroke = strokes[idx]
+		for i in range(1, len(stroke)):
+			if point_to_segment_distance_sq(mx, my, *stroke[i - 1], *stroke[i]) <= threshold:
+				return idx
+	return None
+
+
+def draw_freehand_strokes(surface, strokes, active_idx=None):
+	if not strokes:
+		return
+	overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+	for idx, stroke in enumerate(strokes):
+		if len(stroke) < 2:
+			continue
+		is_active = idx == active_idx
+		color = (255, 90, 90, 255) if is_active else (255, 220, 50, 230)
+		width = 5 if is_active else 3
+		for i in range(1, len(stroke)):
+			pygame.draw.line(overlay, color, stroke[i - 1], stroke[i], width)
+	surface.blit(overlay, (0, 0))
+
+
 def main():
 	pygame.init()
 	configure_windows_taskbar_identity()
-	screen = pygame.display.set_mode(WINDOW_SIZE)
+	screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
 	pygame.display.set_caption("Tactical Pad")
 	apply_window_icon()
 	clock = pygame.time.Clock()
@@ -1532,11 +1574,28 @@ def main():
 		"left": [],
 		"right": [],
 	}
+	draw_strokes = []
+	current_draw_stroke = []
+	draw_active = False
+	active_draw_stroke_idx = None
 	pending_capture = False
 	running = True
 
 	while running:
 		for event in pygame.event.get():
+			if event.type == pygame.VIDEORESIZE:
+				# 창 크기 변경 시 처리
+				WINDOW_SIZE[0], WINDOW_SIZE[1] = event.w, event.h
+				screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
+				global PITCH_RECT
+				PITCH_RECT = get_pitch_rect()
+				# 선수, 존 등 위치를 비율로 재계산
+				def update_player_positions():
+					for team_name in ("left", "right"):
+						formation = team_formations.get(team_name, DEFAULT_FORMATION)
+						apply_team_formation(players, team_name, formation)
+				update_player_positions()
+				background, background_rect = try_load_background(WINDOW_SIZE)
 			if event.type == pygame.QUIT:
 				running = False
 
@@ -1566,6 +1625,20 @@ def main():
 					active_zone_idx = None
 					selected = None
 					link_start_player = None
+				elif event.key == pygame.K_d:
+					mode = MODE_DRAW
+					selected = None
+					selected_zone_idx = None
+					active_zone_idx = None
+					active_link_indices.clear()
+					link_start_player = None
+				elif event.key == pygame.K_DELETE and mode == MODE_DRAW:
+					if active_draw_stroke_idx is not None and 0 <= active_draw_stroke_idx < len(draw_strokes):
+						draw_strokes.pop(active_draw_stroke_idx)
+						active_draw_stroke_idx = None
+					else:
+						draw_strokes.clear()
+						current_draw_stroke.clear()
 				elif event.key == pygame.K_DELETE and mode == MODE_MOVE:
 					if active_link_indices:
 						player_links = [
@@ -1739,6 +1812,29 @@ def main():
 								except Exception as exc:
 									capture_notice_text = f"FotMob load failed: {exc}"
 								capture_notice_frames = CAPTURE_NOTICE_FRAMES
+						elif key == TOOL_CLEAR_ALL:
+							try:
+								root = tk.Tk()
+								root.withdraw()
+								confirmed = messagebox.askyesno(
+									title="Clear All",
+									message="Remove all circles, links, and drawings?",
+									parent=root,
+								)
+								root.destroy()
+							except Exception:
+								confirmed = False
+							if confirmed:
+								zones.clear()
+								player_links.clear()
+								draw_strokes.clear()
+								current_draw_stroke.clear()
+								laser_points.clear()
+								active_draw_stroke_idx = None
+								active_zone_idx = None
+								active_link_indices.clear()
+								capture_notice_text = "Cleared all overlays"
+								capture_notice_frames = CAPTURE_NOTICE_FRAMES
 						else:
 							mode = key
 						selected = None
@@ -1821,6 +1917,14 @@ def main():
 							if not exists:
 								player_links.append((link_start_player, target_player))
 							link_start_player = target_player
+				elif mode == MODE_DRAW:
+					near_idx = pick_draw_stroke_at(draw_strokes, (mx, my))
+					if near_idx is not None:
+						active_draw_stroke_idx = near_idx
+					else:
+						active_draw_stroke_idx = None
+						draw_active = True
+						current_draw_stroke = [(mx, my)]
 
 			elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
 				if team_color_menu_open:
@@ -1880,6 +1984,10 @@ def main():
 				zone_anchor = None
 				zone_center = None
 				zone_radius = 0
+				if draw_active and len(current_draw_stroke) >= 2:
+					draw_strokes.append(list(current_draw_stroke))
+				draw_active = False
+				current_draw_stroke = []
 
 			elif event.type == pygame.MOUSEMOTION and mode == MODE_MOVE and selected is not None:
 				mx, my = event.pos
@@ -1913,6 +2021,16 @@ def main():
 				radius = int(max(abs(cx - ax), abs(cy - ay)) / 2)
 				zone_center = (center_x, center_y)
 				zone_radius = radius
+
+			elif event.type == pygame.MOUSEMOTION and mode == MODE_DRAW and draw_active:
+				mx, my = event.pos
+				if not current_draw_stroke:
+					current_draw_stroke.append((mx, my))
+				else:
+					lx, ly = current_draw_stroke[-1]
+					dx, dy = mx - lx, my - ly
+					if dx * dx + dy * dy >= LASER_DRAW_MIN_DIST_SQ:
+						current_draw_stroke.append((mx, my))
 
 			if event.type == pygame.MOUSEMOTION and menu_open and menu_rect is not None:
 				menu_hover_idx = -1
@@ -1951,6 +2069,9 @@ def main():
 			draw_hatched_zone(screen, zone_center, zone_radius, alpha_scale=0.7)
 
 		draw_player_links(screen, player_links, active_indices=active_link_indices)
+		draw_freehand_strokes(screen, draw_strokes, active_idx=active_draw_stroke_idx)
+		if draw_active and len(current_draw_stroke) >= 2:
+			draw_freehand_strokes(screen, [current_draw_stroke])
 
 		for player in players:
 			show_info_label = team_name_visibility.get(player.team, True)
@@ -1989,6 +2110,8 @@ def main():
 			mode_text = "Mode: Circle"
 		elif mode == MODE_LINK:
 			mode_text = "Mode: Link"
+		elif mode == MODE_DRAW:
+			mode_text = "Mode: Draw  (Del: clear)"
 		else:
 			mode_text = "Mode: Tool"
 		mode_surface = mode_font.render(mode_text, True, (255, 255, 255))
